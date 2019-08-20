@@ -6,3 +6,12 @@ java_test(
         "//dependencies/artifacts/com/datastax/cassandra:cassandra-driver-core",
     ],
 )
+
+java_test(
+    name = "cassandra-fenced-lock",
+    test_class = "distributedlock.CassandraFencedLockTest",
+    srcs = ["CassandraFencedLockTest.java", "Count.java"],
+    deps = [
+        "//dependencies/artifacts/com/datastax/cassandra:cassandra-driver-core",
+    ],
+)
