@@ -3,6 +3,7 @@ package distributedlock;
 import org.junit.Ignore;
 import org.junit.Test;
 
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -36,7 +37,6 @@ public class CassandraFencedLockTest {
         }
     }
 
-    @Ignore
     @Test
     public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException {
         int finalCount = 1000;
@@ -89,6 +89,21 @@ public class CassandraFencedLockTest {
         finally {
             underTest.unlock();
         }
+    }
+
+    @Test
+    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException {
+        int numOfConcurrentOps = 32;
+        Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
+        CassandraFencedLock underTest = new CassandraFencedLock();
+        ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
+        for (int i = 0; i < numOfConcurrentOps; ++i) {
+            final int i_ = i;
+            CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock().isPresent(), executorService);
+        }
+        executorService.shutdown();
+        executorService.awaitTermination(5, TimeUnit.SECONDS);
+        assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
     @Test

@@ -1,5 +1,7 @@
 package distributedlock;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -50,6 +52,21 @@ public class ReentrantLockTest {
     public void tryLockOperationShouldSucceed_ifLockIsCurrentlyFree() {
         Lock underTest = new ReentrantLock();
         assertTrue(underTest.tryLock());
+    }
+
+    @Test
+    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException {
+        int numOfConcurrentOps = 32;
+        Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
+        Lock underTest = new ReentrantLock();
+        ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
+        for (int i = 0; i < numOfConcurrentOps; ++i) {
+            final int i_ = i;
+            CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock(), executorService);
+        }
+        executorService.shutdown();
+        executorService.awaitTermination(5, TimeUnit.SECONDS);
+        assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
     @Test
