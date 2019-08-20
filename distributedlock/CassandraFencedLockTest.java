@@ -38,17 +38,19 @@ public class CassandraFencedLockTest {
     }
 
     @Test
-    public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException {
+    public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException, ExecutionException {
         int finalCount = 1000;
         Count count = new Count(0);
         CassandraFencedLock underTest = new CassandraFencedLock();
         ExecutorService executorService = Executors.newFixedThreadPool(32);
+        CompletableFuture[] tasks = new CompletableFuture[finalCount];
         for (int i = 0; i < finalCount; ++i) {
-            CompletableFuture.runAsync(() -> {
+            tasks[i] = CompletableFuture.runAsync(() -> {
                 Integer fence = 0;
                 try {
                     fence = underTest.lock();
-                    count.set(count.get()+1);
+                    int value = count.get() + 1;
+                    count.set(value);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
@@ -57,6 +59,7 @@ public class CassandraFencedLockTest {
                 }
             }, executorService);
         }
+        CompletableFuture.allOf(tasks).get();
         executorService.shutdown();
         executorService.awaitTermination(5, TimeUnit.SECONDS);
         assertEquals(finalCount, count.get());
@@ -92,18 +95,22 @@ public class CassandraFencedLockTest {
     }
 
     @Test
-    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException {
-        int numOfConcurrentOps = 32;
-        Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
-        CassandraFencedLock underTest = new CassandraFencedLock();
-        ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
-        for (int i = 0; i < numOfConcurrentOps; ++i) {
-            final int i_ = i;
-            CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock().isPresent(), executorService);
+    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException, ExecutionException {
+        for (int j = 0; j < 10000; ++j) {
+            int numOfConcurrentOps = 32;
+            Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
+            CompletableFuture[] tasks = new CompletableFuture[numOfConcurrentOps];
+            CassandraFencedLock underTest = new CassandraFencedLock();
+            ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
+            for (int i = 0; i < numOfConcurrentOps; ++i) {
+                final int i_ = i;
+                tasks[i] = CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock().isPresent(), executorService);
+            }
+            CompletableFuture.allOf(tasks).get();
+            executorService.shutdown();
+            executorService.awaitTermination(5, TimeUnit.SECONDS);
+            assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
         }
-        executorService.shutdown();
-        executorService.awaitTermination(5, TimeUnit.SECONDS);
-        assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
     @Test

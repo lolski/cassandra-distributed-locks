@@ -1,6 +1,7 @@
 package distributedlock;
 
-import java.util.ArrayList;
+import org.junit.Test;
+
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -9,9 +10,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-
-import org.junit.Ignore;
-import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -31,18 +29,20 @@ public class ReentrantLockTest {
     }
 
     @Test
-    public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException {
+    public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException, ExecutionException {
         int finalCount = 1000;
         Count count = new Count(0);
         Lock underTest = new ReentrantLock();
+        CompletableFuture[] tasks = new CompletableFuture[finalCount];
         ExecutorService executorService = Executors.newFixedThreadPool(32);
         for (int i = 0; i < finalCount; ++i) {
-            CompletableFuture.runAsync(() -> {
+            tasks[i] = CompletableFuture.runAsync(() -> {
                 underTest.lock();
                 count.set(count.get()+1);
                 underTest.unlock();
             }, executorService);
         }
+        CompletableFuture.allOf(tasks).get();
         executorService.shutdown();
         executorService.awaitTermination(5, TimeUnit.SECONDS);
         assertEquals(finalCount, count.get());
@@ -55,18 +55,22 @@ public class ReentrantLockTest {
     }
 
     @Test
-    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException {
-        int numOfConcurrentOps = 32;
-        Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
-        Lock underTest = new ReentrantLock();
-        ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
-        for (int i = 0; i < numOfConcurrentOps; ++i) {
-            final int i_ = i;
-            CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock(), executorService);
+    public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException, ExecutionException {
+        for (int j = 0; j < 10000; ++j) {
+            int numOfConcurrentOps = 32;
+            Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
+            CompletableFuture[] tasks = new CompletableFuture[numOfConcurrentOps];
+            Lock underTest = new ReentrantLock();
+            ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
+            for (int i = 0; i < numOfConcurrentOps; ++i) {
+                final int i_ = i;
+                tasks[i] = CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock(), executorService);
+            }
+            CompletableFuture.allOf(tasks).get();
+            executorService.shutdown();
+            executorService.awaitTermination(5, TimeUnit.SECONDS);
+            assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
         }
-        executorService.shutdown();
-        executorService.awaitTermination(5, TimeUnit.SECONDS);
-        assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
     @Test

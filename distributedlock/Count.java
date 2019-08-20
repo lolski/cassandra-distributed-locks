@@ -1,7 +1,7 @@
 package distributedlock;
 
 class Count {
-    private int value;
+    private volatile int value;
 
     Count(int initial) {
         this.value = initial;
