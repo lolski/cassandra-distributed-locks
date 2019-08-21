@@ -18,13 +18,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 public class CassandraFencedLockTest {
     private int keyspaceNumber;
@@ -140,37 +137,33 @@ public class CassandraFencedLockTest {
         assertEquals("Assertion failed on iteration ", 1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
-//    @Test
-//    public void tryLockOperationShouldFail_ifLockIsCurrentlyHeld() throws ExecutionException, InterruptedException {
-//        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
-//            Optional<Long> fence = CompletableFuture.runAsync(underTest::tryLock).thenApply(e -> underTest.tryLock()).get();
-//            assertFalse(fence.isPresent());
-//        }
-//    }
-//
-//
-//    ///
-//
-//
-//    @Test
-//    public void writeOperationShouldSucceed_ifLockHeldByYou() {
-//
-//    }
-//
-//    @Test
-//    public void writeOperationShouldFail_ifLockNotHeld() {
-//
-//    }
-//
-//    @Test
-//    public void writeOperationShouldFail_ifLockNotHeldByYou() {
-//
-//    }
-//
-//    @Test
-//    public void writeOperationShouldFail_ifLockNotHeld_becauseExpired() {
-//
-//    }
+    @Test
+    public void tryLockOperationShouldFail_ifLockIsCurrentlyHeld() throws ExecutionException, InterruptedException {
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            Optional<Long> fence = CompletableFuture.runAsync(underTest::tryLock).thenApply(e -> underTest.tryLock()).get();
+            assertFalse(fence.isPresent());
+        }
+    }
+
+    @Test
+    public void writeOperationShouldSucceed_ifLockHeldByYou() {
+
+    }
+
+    @Test
+    public void writeOperationShouldFail_ifLockNotHeld() {
+
+    }
+
+    @Test
+    public void writeOperationShouldFail_ifLockNotHeldByYou() {
+
+    }
+
+    @Test
+    public void writeOperationShouldFail_ifLockNotHeld_becauseExpired() {
+
+    }
 }
 
 // TODO: implement a distributed attribute lock by using fenced lock
