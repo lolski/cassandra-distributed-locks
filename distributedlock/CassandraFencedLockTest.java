@@ -5,7 +5,6 @@ import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.Session;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import repeat.Repeat;
@@ -85,29 +84,23 @@ public class CassandraFencedLockTest {
             tryLock.get();
         }
     }
-//
-//    @Ignore
-//    @Test
-//    public void tryLockOperationShouldSucceed_ifLockIsCurrentlyFree_2() throws InterruptedException {
-//        // set expire to 10ms
-//        Lock underTest = new ReentrantLock();
-//        Count count = new Count(0);
-//        CompletableFuture.runAsync(() -> {
-//            underTest.lock();
-//            count.set(1);
-//        });
-//        Thread.sleep(50);
-//        try {
-//            CompletableFuture.runAsync(() -> {
-//                underTest.lock();
-//                count.set(2);
-//            });
-//        }
-//        finally {
-//            underTest.unlock();
-//        }
-//    }
-//
+
+    @Test
+    public void tryLockOperationShouldSucceed_ifLockIsCurrentlyFree_2() throws InterruptedException {
+        // set expire to 10ms
+        int timeoutMs = 50;
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber, timeoutMs)) {
+            Optional<Long> lock1 = underTest.tryLock();
+            assertTrue(lock1.isPresent());
+            long startMs = System.currentTimeMillis();
+            while (System.currentTimeMillis() - startMs < timeoutMs) {
+                Thread.sleep(10);
+            }
+            Optional<Long> lock2 = underTest.tryLock();
+            assertTrue(lock2.isPresent());
+        }
+    }
+
     @Test
     @Repeat(times = 10, threads = 1)
     public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException, ExecutionException {
@@ -203,12 +196,17 @@ public class CassandraFencedLockTest {
 // the counter should be stored within a keyspace in a table attribute_lock(fence: counter)
 class CassandraFencedLock implements AutoCloseable {
     private String keyspace;
-    private static final int TIMEOUT_MS = 10000;
+    private long timeoutMs;
     private Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
     private Session session = cluster.connect();
 
     CassandraFencedLock(String keyspace) {
+        this(keyspace, 10000);
+    }
+
+    CassandraFencedLock(String keyspace, long timeoutMs) {
         this.keyspace = keyspace;
+        this.timeoutMs = timeoutMs;
         // create table if not exist
         session.execute("CREATE TABLE IF NOT EXISTS " + keyspace + ".fenced_lock(attribute TEXT PRIMARY KEY, acquired_on BIGINT, expired_on BIGINT);");
         session.execute("INSERT INTO " + keyspace + ".fenced_lock(attribute, acquired_on, expired_on) VALUES('*', 0, 0) IF NOT EXISTS;");
@@ -225,7 +223,7 @@ class CassandraFencedLock implements AutoCloseable {
 
     Optional<Long> tryLock() {
         long acquiredOn = System.currentTimeMillis();
-        long expiredOn = acquiredOn + TIMEOUT_MS;
+        long expiredOn = acquiredOn + timeoutMs;
         ResultSet tryLock = session.execute("UPDATE " + keyspace + ".fenced_lock SET acquired_on = " + acquiredOn + ", expired_on = " + expiredOn + " WHERE attribute = '*' IF expired_on < " + acquiredOn);
         if (tryLock.wasApplied()) {
             return Optional.of(acquiredOn);
