@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class CassandraFencedLockTest {
     private int keyspaceNumber;
@@ -45,18 +46,7 @@ public class CassandraFencedLockTest {
 
     @Test
     public void lockOperationShouldSucceed_ifLockIsCurrentlyFree() throws InterruptedException {
-        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
-            Long fence = null;
-            try {
-                fence = underTest.lock();
-            }finally {
-                if (fence != null) {
-                    underTest.unlock(fence);
-                } else {
-                    System.err.println("Can't release the lock - invalid fence value: '" + fence + "'");
-                }
-            }
-        }
+        tryLockAndUnlock();
     }
 
     @Test
@@ -146,6 +136,34 @@ public class CassandraFencedLockTest {
     }
 
     @Test
+    public void unlockOperationShouldSucceed_ifLockIsCurrentlyHeld() throws InterruptedException {
+        tryLockAndUnlock();
+    }
+
+    @Test
+    public void unlockOperationShouldFail_ifLockIsCurrentlyFree() {
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            try {
+                underTest.unlock(1);
+                fail("An expected RuntimeException was not thrown.");
+            }
+            catch (RuntimeException e) {
+                // this exception is expected
+            }
+        }
+    }
+
+    // TODO: ideally it should throw but it's not easy to implement given Cassandra's design. we can live with it
+    @Test
+    public void unlockOperationShouldSucceed_evenWhenExecutedMultipleTimes() {
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            Optional<Long> lock = underTest.tryLock();
+            underTest.unlock(lock.get());
+            underTest.unlock(lock.get());
+        }
+    }
+
+    @Test
     public void writeOperationShouldSucceed_ifLockHeldByYou() {
 
     }
@@ -163,6 +181,21 @@ public class CassandraFencedLockTest {
     @Test
     public void writeOperationShouldFail_ifLockNotHeld_becauseExpired() {
 
+    }
+
+    private void tryLockAndUnlock() throws InterruptedException {
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            Long fence = null;
+            try {
+                fence = underTest.lock();
+            } finally {
+                if (fence != null) {
+                    underTest.unlock(fence);
+                } else {
+                    System.err.println("Can't release the lock - invalid fence value: '" + fence + "'");
+                }
+            }
+        }
     }
 }
 
