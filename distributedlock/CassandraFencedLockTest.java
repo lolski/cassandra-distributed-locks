@@ -6,7 +6,10 @@ import com.datastax.driver.core.Session;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
+import org.junit.Rule;
 import org.junit.Test;
+import repeat.Repeat;
+import repeat.RepeatRule;
 
 import java.util.Arrays;
 import java.util.Optional;
@@ -15,7 +18,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -26,6 +28,8 @@ import static org.junit.Assert.fail;
 
 public class CassandraFencedLockTest {
     private int keyspaceNumber;
+    @Rule
+    public RepeatRule rule = new RepeatRule();
 
     @Before
     public void setup() {
@@ -118,23 +122,22 @@ public class CassandraFencedLockTest {
     }
 
     @Test
+    @Repeat(times = 10000, threads = 1)
     public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException, ExecutionException {
-//        for (int j = 0; j < 10000; ++j) {
-            int numOfConcurrentOps = 32;
-            Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
-            CompletableFuture[] tasks = new CompletableFuture[numOfConcurrentOps];
-            CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
-            ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
-            for (int i = 0; i < numOfConcurrentOps; ++i) {
-                final int i_ = i;
-                tasks[i] = CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock().isPresent(), executorService);
-            }
-            CompletableFuture.allOf(tasks).get();
-            executorService.shutdown();
-            executorService.awaitTermination(5, TimeUnit.SECONDS);
-            underTest.close();
-            assertEquals("Assertion failed on iteration ", 1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
-//        }
+        int numOfConcurrentOps = 32;
+        Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
+        CompletableFuture[] tasks = new CompletableFuture[numOfConcurrentOps];
+        CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
+        ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
+        for (int i = 0; i < numOfConcurrentOps; ++i) {
+            final int i_ = i;
+            tasks[i] = CompletableFuture.runAsync(() -> holdsLock[i_] = underTest.tryLock().isPresent(), executorService);
+        }
+        CompletableFuture.allOf(tasks).get();
+        executorService.shutdown();
+        executorService.awaitTermination(5, TimeUnit.SECONDS);
+        underTest.close();
+        assertEquals("Assertion failed on iteration ", 1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
     }
 
     @Test

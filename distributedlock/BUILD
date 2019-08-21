@@ -13,5 +13,6 @@ java_test(
     srcs = ["CassandraFencedLockTest.java", "Count.java"],
     deps = [
         "//dependencies/artifacts/com/datastax/cassandra:cassandra-driver-core",
+        "//dependencies/artifacts/com/github/cbismuth:junit-repeat-rule"
     ],
 )
