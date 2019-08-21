@@ -1,5 +1,10 @@
 package distributedlock;
 
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Session;
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 
@@ -10,7 +15,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -20,10 +25,27 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 public class CassandraFencedLockTest {
+    private int keyspaceNumber;
+
+    @Before
+    public void setup() {
+        keyspaceNumber++;
+        try (Session connection = Cluster.builder().addContactPoint("localhost").build().connect()) {
+            connection.execute("CREATE KEYSPACE keyspace_" + keyspaceNumber + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;");
+        }
+    }
+
+    @After
+    public void teardown() {
+        try (Session connection = Cluster.builder().addContactPoint("localhost").build().connect()) {
+            connection.execute("DROP KEYSPACE keyspace_" + keyspaceNumber + ";");
+        }
+    }
+
     @Test
     public void lockOperationShouldSucceed_ifLockIsCurrentlyFree() throws InterruptedException {
-        CassandraFencedLock underTest = new CassandraFencedLock();
-        Integer fence = null;
+        CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
+        Long fence = null;
         try {
             fence = underTest.lock();
         }
@@ -41,12 +63,12 @@ public class CassandraFencedLockTest {
     public void lockOperationShouldSucceed_whenAttemptedConcurrently_ifLocksAreProperlyFreed() throws InterruptedException, ExecutionException {
         int finalCount = 1000;
         Count count = new Count(0);
-        CassandraFencedLock underTest = new CassandraFencedLock();
+        CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
         ExecutorService executorService = Executors.newFixedThreadPool(32);
         CompletableFuture[] tasks = new CompletableFuture[finalCount];
         for (int i = 0; i < finalCount; ++i) {
             tasks[i] = CompletableFuture.runAsync(() -> {
-                Integer fence = 0;
+                long fence = 0;
                 try {
                     fence = underTest.lock();
                     int value = count.get() + 1;
@@ -67,9 +89,10 @@ public class CassandraFencedLockTest {
 
     @Test
     public void tryLockOperationShouldSucceed_ifLockIsCurrentlyFree() {
-        CassandraFencedLock underTest = new CassandraFencedLock();
-        assertTrue(underTest.tryLock().isPresent());
-        underTest.tryLock().get();
+        CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
+        Optional<Long> tryLock = underTest.tryLock();
+        assertTrue(tryLock.isPresent());
+        tryLock.get();
     }
 
     @Ignore
@@ -96,11 +119,11 @@ public class CassandraFencedLockTest {
 
     @Test
     public void tryLockOperationShouldSucceed_whenAttemptedConcurrently() throws InterruptedException, ExecutionException {
-        for (int j = 0; j < 10000; ++j) {
+//        for (int j = 0; j < 10000; ++j) {
             int numOfConcurrentOps = 32;
             Boolean[] holdsLock = new Boolean[numOfConcurrentOps];
             CompletableFuture[] tasks = new CompletableFuture[numOfConcurrentOps];
-            CassandraFencedLock underTest = new CassandraFencedLock();
+            CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
             ExecutorService executorService = Executors.newFixedThreadPool(numOfConcurrentOps);
             for (int i = 0; i < numOfConcurrentOps; ++i) {
                 final int i_ = i;
@@ -109,14 +132,15 @@ public class CassandraFencedLockTest {
             CompletableFuture.allOf(tasks).get();
             executorService.shutdown();
             executorService.awaitTermination(5, TimeUnit.SECONDS);
-            assertEquals(1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
-        }
+            underTest.close();
+            assertEquals("Assertion failed on iteration ", 1, Arrays.asList(holdsLock).stream().filter(e -> e).count());
+//        }
     }
 
     @Test
     public void tryLockOperationShouldFail_ifLockIsCurrentlyHeld() throws ExecutionException, InterruptedException {
-        CassandraFencedLock underTest = new CassandraFencedLock();
-        Optional<Integer> fence = CompletableFuture.runAsync(underTest::tryLock).thenApply(e -> underTest.tryLock()).get();
+        CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber);
+        Optional<Long> fence = CompletableFuture.runAsync(underTest::tryLock).thenApply(e -> underTest.tryLock()).get();
         assertFalse(fence.isPresent());
     }
 
@@ -145,28 +169,50 @@ public class CassandraFencedLockTest {
     }
 }
 
-class CassandraFencedLock {
-    private AtomicInteger fence = new AtomicInteger();
-    private Lock lock = new ReentrantLock();
+// TODO: implement a distributed attribute lock by using fenced lock
+// the counter should be stored within a keyspace in a table attribute_lock(fence: counter)
+class CassandraFencedLock implements AutoCloseable {
+    private String keyspace;
+    private static final int TIMEOUT_MS = 10000;
+    private Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
+    private Session session = cluster.connect();
 
-    int lock() throws InterruptedException {
-        for (Optional<Integer> lock = tryLock(); !lock.isPresent(); lock = tryLock()) {
+    CassandraFencedLock(String keyspace) {
+        this.keyspace = keyspace;
+        // create table if not exist
+        session.execute("CREATE TABLE IF NOT EXISTS " + keyspace + ".fenced_lock(attribute TEXT PRIMARY KEY, acquired_on BIGINT, expired_on BIGINT);");
+        session.execute("INSERT INTO " + keyspace + ".fenced_lock(attribute, acquired_on, expired_on) VALUES('*', 0, 0) IF NOT EXISTS;");
+    }
+
+    long lock() throws InterruptedException {
+        Optional<Long> lock;
+        for (lock = tryLock(); !lock.isPresent(); lock = tryLock()) {
             // wait
             Thread.sleep(1000);
         }
-        return fence.getAndIncrement();
+        return lock.get();
     }
 
-    Optional<Integer> tryLock() {
-        if (lock.tryLock()) {
-            return Optional.of(fence.getAndIncrement());
+    Optional<Long> tryLock() {
+        long acquiredOn = System.currentTimeMillis();
+        long expiredOn = acquiredOn + TIMEOUT_MS;
+        ResultSet tryLock = session.execute("UPDATE " + keyspace + ".fenced_lock SET acquired_on = " + acquiredOn + ", expired_on = " + expiredOn + " WHERE attribute = '*' IF expired_on < " + acquiredOn);
+        if (tryLock.wasApplied()) {
+            return Optional.of(acquiredOn);
         }
         else {
             return Optional.empty();
         }
     }
 
-    void unlock(int fence) {
-        lock.unlock();
+    void unlock(long acquiredOn) {
+        long expiredOn = System.currentTimeMillis();
+        session.execute("UPDATE " + keyspace + ".fenced_lock SET expired_on = " + expiredOn + " WHERE attribute = '*' AND acquired_on = " + acquiredOn);
+    }
+
+    @Override
+    public void close() {
+        session.close();
+        cluster.close();
     }
 }
