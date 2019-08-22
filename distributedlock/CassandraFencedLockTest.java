@@ -192,6 +192,26 @@ public class CassandraFencedLockTest {
     }
 }
 
+class WriterWithFencedLock implements AutoCloseable {
+    private Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
+    private Session session = cluster.connect();
+
+    public ResultSet write(String query, long lock) {
+        if (true) {
+            return session.execute(query);
+        }
+        else {
+            throw new RuntimeException("Lock '" + lock + "' has expired");
+        }
+    }
+
+    @Override
+    public void close() throws Exception {
+        session.close();
+        cluster.close();
+    }
+}
+
 // TODO: implement a distributed attribute lock by using fenced lock
 // the counter should be stored within a keyspace in a table attribute_lock(fence: counter)
 class CassandraFencedLock implements AutoCloseable {
