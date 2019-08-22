@@ -1,0 +1,1 @@
+This repository is an attempt on using Cassandra for distributed locks. The method used is fenced lock. There is a difficulty where the step write(cql, token) can be called by the writer whose locks has expired
