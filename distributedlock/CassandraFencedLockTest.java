@@ -2,6 +2,7 @@ package distributedlock;
 
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
 import org.junit.After;
 import org.junit.Before;
@@ -17,6 +18,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -157,23 +159,70 @@ public class CassandraFencedLockTest {
     }
 
     @Test
-    public void writeOperationShouldSucceed_ifLockHeldByYou() {
-
+    public void writeOperationShouldSucceed_ifLockHeld() {
+        Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
+        Session session = cluster.connect();
+        session.execute("CREATE TABLE keyspace_" + keyspaceNumber + ".test(id text primary key, test_value bigint);");
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            long lock = underTest.tryLock().get();
+            underTest.execute(lock, () -> session.execute("INSERT INTO keyspace_" + keyspaceNumber + ".test(id, test_value) VALUES('a', 1);"));
+            underTest.unlock(lock);
+            long count = session.execute("SELECT COUNT(*) FROM keyspace_" + keyspaceNumber + ".test;").one().getLong("count");
+            assertEquals(1, count);
+        }
     }
 
     @Test
     public void writeOperationShouldFail_ifLockNotHeld() {
-
-    }
-
-    @Test
-    public void writeOperationShouldFail_ifLockNotHeldByYou() {
-
+        Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
+        Session session = cluster.connect();
+        session.execute("CREATE TABLE keyspace_" + keyspaceNumber + ".test(id text primary key, test_value bigint);");
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber)) {
+            long fakeLock = 1; // a fake token not generated from tryLock()
+            try {
+                underTest.execute(fakeLock, () -> session.execute("INSERT INTO keyspace_" + keyspaceNumber + ".test(id, test_value) VALUES('a', 1);"));
+            }
+            catch (RuntimeException e) {
+                if (e.getMessage().startsWith("Lock '")) {
+                    // expected
+                }
+                else {
+                    throw e;
+                }
+            }
+        }
     }
 
     @Test
     public void writeOperationShouldFail_ifLockNotHeld_becauseExpired() {
+        Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
+        Session session = cluster.connect();
+        session.execute("CREATE TABLE keyspace_" + keyspaceNumber + ".test(id text primary key, test_value bigint);");
+        try (CassandraFencedLock underTest = new CassandraFencedLock("keyspace_" + keyspaceNumber, 50)) {
+            long lock = underTest.tryLock().get();
+            try {
+                underTest.execute(lock, () -> {
+                    // sleep for 200ms to deliberately expire the token before executing the insert query
+                    try { Thread.sleep(200); } catch (InterruptedException e) { throw new RuntimeException(e); }
+                    session.execute("INSERT INTO keyspace_" + keyspaceNumber + ".test(id, test_value) VALUES('a', 1);");
+                    return null;
+                });
 
+                long count = session.execute("SELECT COUNT(*) FROM keyspace_" + keyspaceNumber + ".test;").one().getLong("count");
+                fail("An expected RuntimeException was not thrown. is session.execute() executed even though it shouldn't? " + (count == 1) + ". there is " + count + " rows in the table even though there should be 0");
+            }
+            catch (RuntimeException e) {
+                if (e.getMessage().startsWith("Lock '")) {
+                    // expected
+                }
+                else {
+                    throw e;
+                }
+            }
+            finally {
+                underTest.unlock(lock);
+            }
+        }
     }
 
     private void tryLockAndUnlock() throws InterruptedException {
@@ -189,26 +238,6 @@ public class CassandraFencedLockTest {
                 }
             }
         }
-    }
-}
-
-class WriterWithFencedLock implements AutoCloseable {
-    private Cluster cluster = Cluster.builder().addContactPoint("localhost").build();
-    private Session session = cluster.connect();
-
-    public ResultSet write(String query, long lock) {
-        if (true) {
-            return session.execute(query);
-        }
-        else {
-            throw new RuntimeException("Lock '" + lock + "' has expired");
-        }
-    }
-
-    @Override
-    public void close() throws Exception {
-        session.close();
-        cluster.close();
     }
 }
 
@@ -250,6 +279,23 @@ class CassandraFencedLock implements AutoCloseable {
         }
         else {
             return Optional.empty();
+        }
+    }
+
+    public <T> T execute(long lock, Supplier<T> fn) {
+        // the lock can break under this scenario:
+        // 1. client 1 acquires the lock
+        // 2. the lock expired right after the conditional is executed, but before the session.execute() is
+        // 3. client 2 acquires the lock successfully
+        // 4. client 1 finally execute session.execute()
+        Row lock_ = session.execute("SELECT * FROM " + keyspace + ".fenced_lock;").one();
+        long now = System.currentTimeMillis();
+        System.out.println(now + " < " + lock_.getLong("expired_on") + (now < lock_.getLong("expired_on")));
+        if (lock == lock_.getLong("acquired_on") && now < lock_.getLong("expired_on")) {
+            return fn.get();
+        }
+        else {
+            throw new RuntimeException("Lock '" + lock + "' has expired");
         }
     }
 
